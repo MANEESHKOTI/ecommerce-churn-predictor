@@ -1,6 +1,6 @@
 # 🛍️ E-Commerce Customer Churn Prediction AI
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ecommerce-churn-predictiongit-qr4xwis3jph4rmfas48jdu.streamlit.app/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ecommerce-churn-predictor-5u5pvpwdafpfybn9yypfbo.streamlit.app/)
 ![Python](https://img.shields.io/badge/Python-3.9-blue)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED)
 ![Model](https://img.shields.io/badge/Champion_Model-XGBoost-orange)
