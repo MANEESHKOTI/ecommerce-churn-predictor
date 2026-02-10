@@ -3,20 +3,18 @@ import pandas as pd
 import sys
 import os
 
-# --- PATH FIX ---
+# --- PATH SETUP ---
 current_file_path = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# --- IMPORT ---
+# --- IMPORT UNIFIED BACKEND ---
 try:
-    from app.predict import ChurnPredictor
+    from src._inference_api import model_service
 except ImportError:
-    st.error("Could not load 'app/predict.py'.")
+    st.error("⚠️ Backend Error: Could not find 'src/_inference_api.py'.")
     st.stop()
-
-predictor = ChurnPredictor()
 
 st.markdown("# 📂 Batch Prediction")
 st.markdown("Upload a CSV file containing customer data.")
@@ -28,40 +26,31 @@ if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
         st.write(f"✅ Uploaded {len(df)} rows.")
+        st.write("Preview:", df.head())
         
         if st.button("Run Batch Prediction"):
-            with st.spinner("Analyzing customers..."):
-                probs = []
-                preds = []
-                progress_bar = st.progress(0)
+            with st.spinner("Processing batch..."):
+                # Use the efficient batch method from API
+                preds, probs = model_service.predict_batch(df)
                 
-                for i, row in df.iterrows():
-                    # Call the single prediction logic for each row
-                    res = predictor.predict_churn(row.to_dict())
+                if preds is not None:
+                    # Attach results
+                    df['Churn_Prediction'] = preds
+                    df['Churn_Probability'] = probs
                     
-                    if res['status'] == 'success':
-                        probs.append(res['churn_probability'])
-                        preds.append(res['prediction'])
-                    else:
-                        probs.append(0.0) # Fallback
-                        preds.append(0)
+                    st.success("Batch Analysis Complete!")
+                    st.dataframe(df.head())
                     
-                    progress_bar.progress((i + 1) / len(df))
-                
-                # Append results
-                df['Churn_Prediction'] = preds
-                df['Churn_Probability'] = probs
-                
-                st.dataframe(df.head())
-                
-                # Download
-                result_csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    "📥 Download Results CSV",
-                    result_csv,
-                    "churn_predictions_results.csv",
-                    "text/csv"
-                )
+                    # Download Button
+                    result_csv = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Download Results CSV",
+                        result_csv,
+                        "churn_predictions_results.csv",
+                        "text/csv"
+                    )
+                else:
+                    st.error("Batch prediction failed. Ensure columns match training data.")
                     
     except Exception as e:
         st.error(f"Error processing file: {e}")
