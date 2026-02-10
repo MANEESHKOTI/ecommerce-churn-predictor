@@ -3,44 +3,25 @@ import pandas as pd
 import sys
 import os
 
-# --- PATH FIX: FORCE PYTHON TO FIND THE 'src' FOLDER ---
+# --- PATH FIX ---
 current_file_path = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
-# -------------------------------------------------------
 
+# --- IMPORT ---
 try:
-    from src._inference_api import model_service
-except ImportError as e:
-    st.error(f"❌ Critical Import Error: {e}")
+    from app.predict import ChurnPredictor
+except ImportError:
+    st.error("Could not load 'app/predict.py'.")
     st.stop()
 
+predictor = ChurnPredictor()
+
 st.markdown("# 📂 Batch Prediction")
-st.markdown("Upload a CSV file containing customer data to generate predictions for the entire list.")
+st.markdown("Upload a CSV file containing customer data.")
 
-# --- FILE UPLOADER ---
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-
-# --- TEMPLATE ---
-st.markdown("---")
-st.markdown("#### Need a template?")
-sample_data = {
-    'Recency': [10, 200, 5],
-    'Frequency': [5, 1, 20],
-    'TotalSpent': [500, 50, 2000],
-    'AvgOrderValue': [20, 10, 50]
-}
-sample_df = pd.DataFrame(sample_data)
-csv = sample_df.to_csv(index=False).encode('utf-8')
-
-st.download_button(
-    "📥 Download Example CSV",
-    csv,
-    "example_input.csv",
-    "text/csv",
-    key='download-template'
-)
 
 # --- LOGIC ---
 if uploaded_file is not None:
@@ -50,26 +31,37 @@ if uploaded_file is not None:
         
         if st.button("Run Batch Prediction"):
             with st.spinner("Analyzing customers..."):
-                preds, probs = model_service.predict_batch(df)
+                probs = []
+                preds = []
+                progress_bar = st.progress(0)
                 
-                if preds is not None:
-                    df['Churn_Prediction'] = preds
-                    df['Churn_Probability'] = probs
+                for i, row in df.iterrows():
+                    # Call the single prediction logic for each row
+                    res = predictor.predict_churn(row.to_dict())
                     
-                    st.dataframe(df.head())
+                    if res['status'] == 'success':
+                        probs.append(res['churn_probability'])
+                        preds.append(res['prediction'])
+                    else:
+                        probs.append(0.0) # Fallback
+                        preds.append(0)
                     
-                    result_csv = df.to_csv(index=False).encode('utf-8')
-                    
-                    st.success("Analysis Complete!")
-                    st.download_button(
-                        "📥 Download Results CSV",
-                        result_csv,
-                        "churn_predictions.csv",
-                        "text/csv",
-                        key='download-csv'
-                    )
-                else:
-                    st.error("Error during prediction. Check terminal logs.")
+                    progress_bar.progress((i + 1) / len(df))
+                
+                # Append results
+                df['Churn_Prediction'] = preds
+                df['Churn_Probability'] = probs
+                
+                st.dataframe(df.head())
+                
+                # Download
+                result_csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Download Results CSV",
+                    result_csv,
+                    "churn_predictions_results.csv",
+                    "text/csv"
+                )
                     
     except Exception as e:
-        st.error(f"Error reading file: {e}")
+        st.error(f"Error processing file: {e}")

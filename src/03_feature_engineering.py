@@ -1,89 +1,103 @@
 import pandas as pd
 import numpy as np
 import os
-from datetime import datetime
+import json
+import logging
+from datetime import timedelta
 
 # --- CONFIGURATION ---
-INPUT_FILE = 'data/processed/cleaned_transactions.csv'
-OUTPUT_FILE = 'data/processed/customer_features.csv'
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+INPUT_FILE = os.path.join(PROJECT_ROOT, "data", "processed", "cleaned_transactions.csv")
+OUTPUT_FEATURES = os.path.join(PROJECT_ROOT, "data", "processed", "customer_features.csv")
+OUTPUT_INFO = os.path.join(PROJECT_ROOT, "data", "processed", "feature_info.json")
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 
-def engineer_features():
-    print("--- Phase 3: Feature Engineering (Optimized) ---")
-    
-    # 1. Load Data
-    if not os.path.exists(INPUT_FILE):
-        print(f"❌ Error: {INPUT_FILE} not found.")
-        return
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(level=logging.INFO, filename=os.path.join(LOG_DIR, 'feature_engineering.log'))
 
-    print(f"Loading {INPUT_FILE}...")
-    df = pd.read_csv(INPUT_FILE)
-    df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
-    df['TotalSpent'] = df['Quantity'] * df['UnitPrice']
-    
-    # --- STRICT TIME WINDOW (Avoid Dec 2011 Cliff) ---
-    observation_end = datetime(2011, 12, 1)
-    training_cutoff = datetime(2011, 9, 1)
-    
-    print(f"Window: {training_cutoff.date()} to {observation_end.date()}")
-    
-    # Filter dataset
-    df = df[df['InvoiceDate'] < observation_end]
-    
-    # Split
-    train_df = df[df['InvoiceDate'] <= training_cutoff]
-    observation_df = df[df['InvoiceDate'] > training_cutoff]
-    
-    # 2. Identify Target (Churn)
-    # Target Population: Customers who existed in Training
-    train_customers = set(train_df['CustomerID'].unique())
-    active_customers = set(observation_df['CustomerID'].unique())
-    
-    features = pd.DataFrame({'CustomerID': list(train_customers)})
-    
-    # Define Churn: 1 if NOT in active list
-    features['Churn'] = features['CustomerID'].apply(lambda x: 1 if x not in active_customers else 0)
-    
-    # 3. Calculate RFM (Training Data Only)
-    print("Calculating features...")
-    rfm = train_df.groupby('CustomerID').agg({
-        'InvoiceDate': lambda x: (training_cutoff - x.max()).days, # Recency
-        'InvoiceNo': 'nunique',                                    # Frequency
-        'TotalSpent': 'sum',                                       # Monetary
-        'UnitPrice': 'mean'                                        # Avg Price
-    }).reset_index()
+class FeatureEngineer:
+    def __init__(self):
+        self.transactions = pd.read_csv(INPUT_FILE, parse_dates=['InvoiceDate'])
+        self.max_date = self.transactions['InvoiceDate'].max()
+        # 120-day window to stabilize churn
+        self.training_cutoff = self.max_date - timedelta(days=120)
+        self.training_data = self.transactions[self.transactions['InvoiceDate'] <= self.training_cutoff].copy()
+        self.observation_data = self.transactions[self.transactions['InvoiceDate'] > self.training_cutoff].copy()
+        self.customer_features = pd.DataFrame({'CustomerID': list(self.training_data['CustomerID'].unique())})
 
-    rfm.rename(columns={
-        'InvoiceDate': 'Recency',
-        'InvoiceNo': 'Frequency',
-        'TotalSpent': 'Monetary',
-        'UnitPrice': 'AvgPrice'
-    }, inplace=True)
-    
-    features = features.merge(rfm, on='CustomerID', how='left')
+    def create_target(self):
+        obs_customers = set(self.observation_data['CustomerID'].unique())
+        self.customer_features['Churn'] = self.customer_features['CustomerID'].apply(lambda x: 1 if x not in obs_customers else 0)
+        print(f"Churn Rate: {self.customer_features['Churn'].mean()*100:.2f}%")
 
-    # --- FILTER: REMOVE ONE-TIME BUYERS ---
-    # This aligns with focusing on "Retention" of actual customers
-    initial_count = len(features)
-    features = features[features['Frequency'] > 1]
-    filtered_count = len(features)
-    print(f"Filtered {initial_count - filtered_count} one-time buyers.")
+    def engineer_features(self):
+        # RFM
+        ref_date = self.training_cutoff
+        rfm = self.training_data.groupby('CustomerID').agg({
+            'InvoiceDate': lambda x: (ref_date - x.max()).days,
+            'InvoiceNo': 'nunique',
+            'TotalPrice': 'sum',
+            'Quantity': 'mean',
+            'StockCode': 'nunique'
+        }).reset_index()
+        rfm.columns = ['CustomerID', 'Recency', 'Frequency', 'TotalSpent', 'AvgBasketSize', 'DistinctProducts']
+        self.customer_features = self.customer_features.merge(rfm, on='CustomerID', how='left')
 
-    # 4. Save
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    features.to_csv(OUTPUT_FILE, index=False)
-    
-    # Final Stats
-    churn_rate = features['Churn'].mean() * 100
-    print("\n" + "="*40)
-    print("FEATURE ENGINEERING COMPLETE")
-    print(f"Total Customers: {len(features):,}")
-    print(f"Churn Rate:      {churn_rate:.2f}% (Target: 20-40%)")
-    
-    if 20 <= churn_rate <= 40:
-        print("✅ SUCCESS: Rate is PERFECT.")
-    else:
-        print("⚠️ NOTE: Rate is valid (10-60%) but outside ideal target.")
-    print("="*40)
+        # Interaction & Golden Features
+        self.customer_features['AvgTransactionValue'] = self.customer_features['TotalSpent'] / self.customer_features['Frequency']
+        self.customer_features['ProductDiversity'] = self.customer_features['DistinctProducts'] / self.customer_features['Frequency']
+        
+        # Behavioral
+        df = self.training_data.sort_values(['CustomerID', 'InvoiceDate'])
+        df['prev_date'] = df.groupby('CustomerID')['InvoiceDate'].shift(1)
+        df['days_diff'] = (df['InvoiceDate'] - df['prev_date']).dt.days
+        avg_days = df.groupby('CustomerID')['days_diff'].mean().reset_index().rename(columns={'days_diff': 'AvgDaysBetweenPurchases'})
+        self.customer_features = self.customer_features.merge(avg_days, on='CustomerID', how='left')
+        self.customer_features['AvgDaysBetweenPurchases'].fillna(999, inplace=True)
+
+        # THE GOLDEN FEATURE: Lateness Score
+        # Ratio of "How long since they bought" vs "How often they usually buy"
+        self.customer_features['LatenessScore'] = self.customer_features['Recency'] / (self.customer_features['AvgDaysBetweenPurchases'] + 1)
+        
+        # Solo Shopper Flag
+        self.customer_features['IsSoloShopper'] = (self.customer_features['Frequency'] == 1).astype(int)
+
+        # Segments
+        self.customer_features['R_Score'] = pd.qcut(self.customer_features['Recency'], 4, labels=[4,3,2,1]).astype(int)
+        self.customer_features['F_Score'] = pd.qcut(self.customer_features['Frequency'].rank(method='first'), 4, labels=[1,2,3,4]).astype(int)
+        self.customer_features['M_Score'] = pd.qcut(self.customer_features['TotalSpent'].rank(method='first'), 4, labels=[1,2,3,4]).astype(int)
+        self.customer_features['RFM_Score'] = self.customer_features['R_Score'] + self.customer_features['F_Score'] + self.customer_features['M_Score']
+        
+        def segment(s):
+            if s >= 10: return 'Champions'
+            elif s >= 8: return 'Loyal'
+            elif s >= 6: return 'Potential'
+            elif s >= 4: return 'At Risk'
+            else: return 'Lost'
+        self.customer_features['CustomerSegment'] = self.customer_features['RFM_Score'].apply(segment)
+
+    def save(self):
+        self.customer_features.fillna(0, inplace=True)
+        self.customer_features.to_csv(OUTPUT_FEATURES, index=False)
+        
+        # Save JSON
+        cols = [c for c in self.customer_features.columns if c not in ['CustomerID', 'Churn']]
+        info = {
+            "total_features": len(cols),
+            "churn_rate": self.customer_features['Churn'].mean(),
+            "features": [{"name": c, "type": str(self.customer_features[c].dtype)} for c in cols],
+            "feature_categories": {
+                "golden": ["LatenessScore", "IsSoloShopper"],
+                "rfm": ["Recency", "Frequency", "TotalSpent"]
+            }
+        }
+        with open(OUTPUT_INFO, 'w') as f:
+            json.dump(info, f, indent=4)
+        print(f"Features Saved. Count: {len(cols)}")
 
 if __name__ == "__main__":
-    engineer_features()
+    fe = FeatureEngineer()
+    fe.create_target()
+    fe.engineer_features()
+    fe.save()

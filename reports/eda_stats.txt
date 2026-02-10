@@ -1,0 +1,6 @@
+T-Test Results (Comparing Active vs Churned Means)
+==================================================
+Recency: t=16.13, p=0.0000 -> SIGNIFICANT
+LatenessScore: t=15.26, p=0.0000 -> SIGNIFICANT
+TotalSpent: t=-14.13, p=0.0000 -> SIGNIFICANT
+Frequency: t=-15.61, p=0.0000 -> SIGNIFICANT

@@ -1,1 +1,1 @@
-["Recency", "Frequency", "Monetary", "AvgPrice"]
+["Recency", "Frequency", "TotalSpent", "AvgBasketSize", "DistinctProducts", "AvgTransactionValue", "ProductDiversity", "AvgDaysBetweenPurchases", "LatenessScore", "IsSoloShopper", "R_Score", "F_Score", "M_Score", "RFM_Score", "CustomerSegment_Champions", "CustomerSegment_Lost", "CustomerSegment_Loyal", "CustomerSegment_Potential"]

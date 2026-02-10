@@ -2,89 +2,158 @@ import pandas as pd
 import numpy as np
 import os
 import json
-import sys
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
+import logging
+from datetime import datetime
 
-# Construct path relative to project root
-RAW_DATA_PATH = os.path.join(project_root, "data", "raw", "online_retail_II.xlsx")
 # --- CONFIGURATION ---
-PROCESSED_DIR = 'data/processed'
-OUTPUT_FILE = os.path.join(PROCESSED_DIR, 'cleaned_transactions.csv')
-STATS_FILE = os.path.join(PROCESSED_DIR, 'cleaning_statistics.json')
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+DEFAULT_INPUT_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "online_retail_II.xlsx")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, 'data_cleaning.log'),
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class DataCleaner:
-    def __init__(self):
+    def __init__(self, input_path=None):
+        self.input_path = input_path if input_path else DEFAULT_INPUT_PATH
         self.df = None
-        self.stats = {}
+        self.cleaning_stats = {
+            'original_rows': 0, 'rows_after_cleaning': 0, 'rows_removed': 0,
+            'retention_rate': 0.0, 'missing_values_before': {}, 
+            'missing_values_after': {}, 'steps_applied': []
+        }
 
     def load_data(self):
-        print(f"Loading raw data from {RAW_DATA_PATH}...")
+        print(f"Loading raw dataset from {self.input_path}...")
         try:
-            # Load both sheets as we did in Phase 1
-            all_sheets = pd.read_excel(RAW_DATA_PATH, sheet_name=None)
-            self.df = pd.concat(all_sheets.values(), ignore_index=True)
-            self.stats['original_rows'] = len(self.df)
-            print(f"Initial Row Count: {len(self.df):,}")
+            if self.input_path.endswith('.csv'):
+                self.df = pd.read_csv(self.input_path, encoding='latin1', parse_dates=['InvoiceDate'])
+            else:
+                self.df = pd.read_excel(self.input_path)
+                self.df.rename(columns={'Invoice': 'InvoiceNo', 'Customer ID': 'CustomerID', 'Price': 'UnitPrice', 'Data': 'InvoiceDate'}, inplace=True)
+            
+            self.cleaning_stats['original_rows'] = len(self.df)
+            self.cleaning_stats['missing_values_before'] = self.df.isnull().sum().to_dict()
+            return self
         except Exception as e:
-            print(f"❌ Error loading data: {e}")
-            sys.exit(1)
+            logging.error(f"Failed to load data: {str(e)}")
+            raise e
 
-    def clean(self):
-        print("--- Starting Cleaning Pipeline ---")
-        
-        # 1. Standardize Column Names
-        print("Step 1: Standardizing columns...")
-        self.df.rename(columns={
-            'Customer ID': 'CustomerID',
-            'User ID': 'CustomerID',
-            'Price': 'UnitPrice',
-            'Invoice': 'InvoiceNo',
-            'Data': 'InvoiceDate'
-        }, inplace=True)
-
-        # 2. Remove Missing CustomerIDs
-        print("Step 2: Removing missing CustomerIDs...")
-        before = len(self.df)
+    def remove_missing_customer_ids(self):
+        initial_rows = len(self.df)
         self.df = self.df.dropna(subset=['CustomerID'])
-        self.stats['missing_id_removed'] = before - len(self.df)
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'remove_missing_customer_ids', 'rows_removed': rows_removed})
+        return self
 
-        # 3. Remove Cancellations (Invoice starts with 'C')
-        print("Step 3: Removing cancellations...")
+    def handle_cancelled_invoices(self):
+        initial_rows = len(self.df)
         self.df['InvoiceNo'] = self.df['InvoiceNo'].astype(str)
         self.df = self.df[~self.df['InvoiceNo'].str.startswith('C')]
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'handle_cancelled_invoices', 'rows_removed': rows_removed})
+        return self
+
+    def handle_negative_quantities(self):
+        initial_rows = len(self.df)
+        self.df = self.df[self.df['Quantity'] > 0]
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'handle_negative_quantities', 'rows_removed': rows_removed})
+        return self
+
+    def handle_zero_prices(self):
+        initial_rows = len(self.df)
+        self.df = self.df[self.df['UnitPrice'] > 0]
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'handle_zero_prices', 'rows_removed': rows_removed})
+        return self
+
+    def handle_missing_descriptions(self):
+        initial_rows = len(self.df)
+        self.df = self.df.dropna(subset=['Description'])
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'handle_missing_descriptions', 'rows_removed': rows_removed})
+        return self
+
+    def remove_outliers(self):
+        initial_rows = len(self.df)
+        Q1 = self.df['Quantity'].quantile(0.25)
+        Q3 = self.df['Quantity'].quantile(0.75)
+        IQR = Q3 - Q1
+        self.df = self.df[(self.df['Quantity'] >= (Q1 - 1.5 * IQR)) & (self.df['Quantity'] <= (Q3 + 1.5 * IQR))]
         
-        # 4. Remove Negative/Zero Quantities & Prices
-        print("Step 4: Removing invalid values...")
-        self.df = self.df[(self.df['Quantity'] > 0) & (self.df['UnitPrice'] > 0)]
+        Q1_p = self.df['UnitPrice'].quantile(0.25)
+        Q3_p = self.df['UnitPrice'].quantile(0.75)
+        IQR_p = Q3_p - Q1_p
+        self.df = self.df[(self.df['UnitPrice'] >= (Q1_p - 1.5 * IQR_p)) & (self.df['UnitPrice'] <= (Q3_p + 1.5 * IQR_p))]
         
-        # 5. Handle Duplicates
-        print("Step 5: Removing duplicates...")
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'remove_outliers', 'rows_removed': rows_removed, 'method': 'IQR'})
+        return self
+
+    def remove_duplicates(self):
+        initial_rows = len(self.df)
         self.df = self.df.drop_duplicates()
+        rows_removed = initial_rows - len(self.df)
+        self.cleaning_stats['steps_applied'].append({'step': 'remove_duplicates', 'rows_removed': rows_removed})
+        return self
 
-        # Final Stats
-        self.stats['final_rows'] = len(self.df)
-        self.stats['retention_rate'] = (self.stats['final_rows'] / self.stats['original_rows']) * 100
+    def add_derived_columns(self):
+        self.df['InvoiceDate'] = pd.to_datetime(self.df['InvoiceDate'])
+        self.df['TotalPrice'] = self.df['Quantity'] * self.df['UnitPrice']
+        self.df['Year'] = self.df['InvoiceDate'].dt.year
+        self.df['Month'] = self.df['InvoiceDate'].dt.month
+        self.df['DayOfWeek'] = self.df['InvoiceDate'].dt.dayofweek
+        self.df['Hour'] = self.df['InvoiceDate'].dt.hour
+        self.cleaning_stats['steps_applied'].append({'step': 'add_derived_columns'})
+        return self
 
-    def save_data(self):
-        os.makedirs(PROCESSED_DIR, exist_ok=True)
+    def convert_data_types(self):
+        self.df['CustomerID'] = self.df['CustomerID'].astype(int)
+        self.df['Country'] = self.df['Country'].astype('category')
+        self.cleaning_stats['steps_applied'].append({'step': 'convert_data_types'})
+        return self
+
+    def save_cleaned_data(self):
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        self.df.to_csv(os.path.join(OUTPUT_DIR, 'cleaned_transactions.csv'), index=False)
         
-        print(f"Saving cleaned data to {OUTPUT_FILE}...")
-        self.df.to_csv(OUTPUT_FILE, index=False)
+        self.cleaning_stats['rows_after_cleaning'] = len(self.df)
+        self.cleaning_stats['rows_removed'] = self.cleaning_stats['original_rows'] - self.cleaning_stats['rows_after_cleaning']
+        self.cleaning_stats['retention_rate'] = (self.cleaning_stats['rows_after_cleaning'] / self.cleaning_stats['original_rows']) * 100
+        self.cleaning_stats['missing_values_after'] = self.df.isnull().sum().to_dict()
         
-        # Save statistics JSON (Required by PDF)
-        with open(STATS_FILE, 'w') as f:
-            json.dump(self.stats, f, indent=4)
-            
-        print("\n" + "="*40)
-        print(f"CLEANING COMPLETE")
-        print(f"Original Rows: {self.stats['original_rows']:,}")
-        print(f"Cleaned Rows:  {self.stats['final_rows']:,}")
-        print(f"Retention Rate: {self.stats['retention_rate']:.2f}%")
-        print("="*40)
+        def convert_types(obj):
+            if isinstance(obj, np.integer): return int(obj)
+            elif isinstance(obj, np.floating): return float(obj)
+            elif isinstance(obj, np.ndarray): return obj.tolist()
+            return obj
+
+        with open(os.path.join(OUTPUT_DIR, 'cleaning_statistics.json'), 'w') as f:
+            json.dump(self.cleaning_stats, f, indent=4, default=convert_types)
+        
+        print(f"Data Cleaning Complete. Retention: {self.cleaning_stats['retention_rate']:.2f}%")
+        return self
+
+    def run_pipeline(self):
+        self.load_data()
+        self.remove_missing_customer_ids()
+        self.handle_cancelled_invoices()
+        self.handle_negative_quantities()
+        self.handle_zero_prices()
+        self.handle_missing_descriptions()
+        self.remove_outliers()
+        self.remove_duplicates()
+        self.add_derived_columns()
+        self.convert_data_types()
+        self.save_cleaned_data()
 
 if __name__ == "__main__":
     cleaner = DataCleaner()
-    cleaner.load_data()
-    cleaner.clean()
-    cleaner.save_data()
+    cleaner.run_pipeline()

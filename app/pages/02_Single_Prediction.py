@@ -1,22 +1,31 @@
 import streamlit as st
 import sys
 import os
+import time
 
-# --- PATH FIX: FORCE PYTHON TO FIND THE 'src' FOLDER ---
-# Get the absolute path of the current file (app/pages/02_Single_Prediction.py)
+# --- PATH FIX ---
+# Calculate path to project root
 current_file_path = os.path.abspath(__file__)
-# Go up 3 levels: 02_Single... -> pages -> app -> ecommerce-churn-prediction (ROOT)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
-# Add the root to Python's search path
 if project_root not in sys.path:
     sys.path.append(project_root)
-# -------------------------------------------------------
 
-# NOW import the src module
+# --- IMPORT NEW PREDICTOR ---
 try:
-    from src._inference_api import model_service
-except ImportError as e:
-    st.error(f"❌ Critical Import Error: {e}")
+    from app.predict import ChurnPredictor
+except ImportError:
+    st.error("Could not load 'app/predict.py'. Check your folder structure.")
+    st.stop()
+
+# --- LOAD MODEL ---
+@st.cache_resource
+def get_predictor():
+    return ChurnPredictor()
+
+try:
+    predictor = get_predictor()
+except Exception as e:
+    st.error(f"Failed to initialize model: {e}")
     st.stop()
 
 st.markdown("# 👤 Single Customer Prediction")
@@ -27,52 +36,43 @@ with st.form("prediction_form"):
     col1, col2 = st.columns(2)
     
     with col1:
-        recency = st.number_input(
-            "Recency (Days since last purchase)", 
-            min_value=0, max_value=365, value=10,
-            help="How many days ago was their last order?"
-        )
-        frequency = st.number_input(
-            "Frequency (Total orders)", 
-            min_value=1, max_value=1000, value=5,
-            help="Total number of invoices for this customer."
-        )
+        recency = st.number_input("Recency (Days since last purchase)", 0, 365, 10)
+        frequency = st.number_input("Frequency (Total orders)", 1, 1000, 5)
+        avg_days = st.number_input("Avg Days Between Purchases", 1.0, 365.0, 30.0)
         
     with col2:
-        monetary = st.number_input(
-            "Monetary (Total Spend £)", 
-            min_value=0.0, max_value=100000.0, value=500.0,
-            help="Total lifetime spend."
-        )
-        avg_price = st.number_input(
-            "Average Unit Price (£)",
-            min_value=0.0, max_value=1000.0, value=25.0,
-            help="Average price of items they buy."
-        )
+        monetary = st.number_input("Total Spend (£)", 0.0, 100000.0, 500.0)
+        avg_basket = st.number_input("Avg Basket Size", 1.0, 100.0, 10.0)
 
-    # Submit Button
     submitted = st.form_submit_button("Predict Churn Risk")
 
 # --- LOGIC ---
 if submitted:
+    # Prepare data matching the features expected by predict.py
     input_data = {
         'Recency': recency,
         'Frequency': frequency,
         'TotalSpent': monetary,
-        'AvgOrderValue': avg_price
+        'AvgBasketSize': avg_basket,
+        'AvgDaysBetweenPurchases': avg_days,
+        'LatenessScore': recency / (avg_days + 1),  # Dynamic Feature Calculation
+        'IsSoloShopper': 1 if frequency == 1 else 0
     }
     
-    pred, prob = model_service.predict(input_data)
+    with st.spinner("Analyzing..."):
+        result = predictor.predict_churn(input_data)
     
-    if pred is not None:
+    if result['status'] == 'success':
+        pred = result['prediction']
+        prob = result['churn_probability']
+        
         st.divider()
         st.markdown("### 🔍 Prediction Result")
         
-        if pred == 1:
+        if prob > 0.5:
             st.error(f"🚨 **High Churn Risk** (Probability: {prob:.1%})")
             st.info("💡 **Recommendation:** Send immediate retention offer.")
         else:
             st.success(f"✅ **Loyal Customer** (Probability: {prob:.1%})")
-            st.info("💡 **Recommendation:** Add to 'Loyalty Program' tier.")
     else:
-        st.error("Error: Could not get prediction. Check terminal logs.")
+        st.error(f"Prediction Error: {result.get('message')}")

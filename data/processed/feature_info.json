@@ -1,0 +1,77 @@
+{
+    "total_features": 15,
+    "churn_rate": 0.36765183501136733,
+    "features": [
+        {
+            "name": "Recency",
+            "type": "int64"
+        },
+        {
+            "name": "Frequency",
+            "type": "int64"
+        },
+        {
+            "name": "TotalSpent",
+            "type": "float64"
+        },
+        {
+            "name": "AvgBasketSize",
+            "type": "float64"
+        },
+        {
+            "name": "DistinctProducts",
+            "type": "int64"
+        },
+        {
+            "name": "AvgTransactionValue",
+            "type": "float64"
+        },
+        {
+            "name": "ProductDiversity",
+            "type": "float64"
+        },
+        {
+            "name": "AvgDaysBetweenPurchases",
+            "type": "float64"
+        },
+        {
+            "name": "LatenessScore",
+            "type": "float64"
+        },
+        {
+            "name": "IsSoloShopper",
+            "type": "int64"
+        },
+        {
+            "name": "R_Score",
+            "type": "int64"
+        },
+        {
+            "name": "F_Score",
+            "type": "int64"
+        },
+        {
+            "name": "M_Score",
+            "type": "int64"
+        },
+        {
+            "name": "RFM_Score",
+            "type": "int64"
+        },
+        {
+            "name": "CustomerSegment",
+            "type": "object"
+        }
+    ],
+    "feature_categories": {
+        "golden": [
+            "LatenessScore",
+            "IsSoloShopper"
+        ],
+        "rfm": [
+            "Recency",
+            "Frequency",
+            "TotalSpent"
+        ]
+    }
+}
