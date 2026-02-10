@@ -7,7 +7,7 @@
 
 An end-to-end machine learning solution designed to predict customer churn for an e-commerce platform. This application transforms raw transaction logs into actionable insights, identifying at-risk customers to enable targeted retention campaigns.
 
-🔴 **Live Demo:** [Click here to view the App](https://ecommerce-churn-predictiongit-qr4xwis3jph4rmfas48jdu.streamlit.app/)
+🔴 **Live Demo:** [Click here to view the App](https://ecommerce-churn-predictor-5u5pvpwdafpfybn9yypfbo.streamlit.app/)
 
 ---
 
