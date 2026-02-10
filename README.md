@@ -51,4 +51,4 @@ cd ecommerce-churn-prediction
 pip install -r requirements.txt
 
 # 3. Run the application
-streamlit run app/streamlit_app.py
+streamlit run app/streamlit_app.py# ecommerce_churn_prediction_repo
